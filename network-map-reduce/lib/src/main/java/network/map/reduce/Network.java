@@ -3,58 +3,169 @@
  */
 package network.map.reduce;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 import java.util.StringTokenizer;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.log4j.Logger;
 
 public class Network {
 	
+	private static Logger logger = Logger.getLogger(Network.class);
+	
 	public static void main(String[] args) throws Exception {
 		Configuration conf = new Configuration();
-		Job job = Job.getInstance(conf, "word count");
+		Job job = Job.getInstance(conf, "common peers");
 		job.setJarByClass(Network.class);
 		job.setMapperClass(TokenizerMapper.class);
 		// job.setCombinerClass(IntSumReducer.class);
 		job.setReducerClass(IntSumReducer.class);
-		job.setOutputKeyClass(Text.class);
-		job.setOutputValueClass(IntWritable.class);
+		job.setMapOutputKeyClass(Tuple.class);
+		job.setMapOutputValueClass(Text.class);
+		job.setOutputKeyClass(Tuple.class);
+		job.setOutputValueClass(Text.class);
+		logger.info("InputPath: " + args[0]);
 		FileInputFormat.addInputPath(job, new Path(args[0]));
+		logger.info("OutputPath: " + args[1]);
 		FileOutputFormat.setOutputPath(job, new Path(args[1]));
 		System.exit(job.waitForCompletion(true) ? 0 : 1);
 	}
 
-	public static class TokenizerMapper extends Mapper<Object, Text, Text, IntWritable> {
-		private final static IntWritable one = new IntWritable(1);
-		private Text word = new Text();
-
+//	public static class TokenizerMapper extends Mapper<Object, Text, Text, IntWritable> {
+//		private final static IntWritable one = new IntWritable(1);
+//		private Text word = new Text();
+//
+//		public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+//			StringTokenizer itr = new StringTokenizer(value.toString());
+//			while (itr.hasMoreTokens()) {
+//				word.set(itr.nextToken());
+//				context.write(word, one);
+//			}
+//		}
+//	}
+	public static class TokenizerMapper extends Mapper<Object, Text, Tuple, Text> {
 		public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+			logger.info("Line: " + value.toString());
 			StringTokenizer itr = new StringTokenizer(value.toString());
+			List<Text> nodes = new ArrayList<Text>();
 			while (itr.hasMoreTokens()) {
-				word.set(itr.nextToken());
-				context.write(word, one);
+				nodes.add(new Text(itr.nextToken()));
+			}
+			for(int i = 1; i < nodes.size(); i++) {
+				if(nodes.get(0).compareTo(nodes.get(i)) > 0) {
+					Tuple p = new Tuple(nodes.get(0), nodes.get(i));
+					Text x = new Text(nodes.stream().map(Text::getBytes).toArray().toString());
+					context.write(p, x);
+				} else {
+					Tuple p = new Tuple(nodes.get(i), nodes.get(0));
+					Text x = new Text(nodes.stream().map(Text::getBytes).toArray().toString());
+					context.write(p, x);
+				}
 			}
 		}
 	}
 
-	public static class IntSumReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
-		private IntWritable result = new IntWritable();
-
-		public void reduce(Text key, Iterable<IntWritable> values, Context context)
+//	public static class IntSumReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+//		private IntWritable result = new IntWritable();
+//
+//		public void reduce(Text key, Iterable<IntWritable> values, Context context)
+//				throws IOException, InterruptedException {
+//			int sum = 0;
+//			for (IntWritable val : values) {
+//				sum += val.get();
+//			}
+//			result.set(sum);
+//			context.write(key, result);
+//		}
+//	}
+	public static class IntSumReducer extends Reducer<Tuple, Text, Tuple, Text> {
+		public void reduce(Tuple key, Iterable<Text> values, Context context)
 				throws IOException, InterruptedException {
-			int sum = 0;
-			for (IntWritable val : values) {
-				sum += val.get();
+			Iterator<Text> vals = values.iterator();
+			List<Text> list1 = new ArrayList<Text>();
+			StringTokenizer tokenizer = new StringTokenizer(vals.next().toString());
+			while(tokenizer.hasMoreTokens()) {
+				list1.add(new Text((String) tokenizer.nextToken()));
 			}
-			result.set(sum);
-			context.write(key, result);
+			tokenizer = new StringTokenizer(vals.next().toString());
+			List<Text> list2 = new ArrayList<Text>();
+			while(tokenizer.hasMoreTokens()) {
+				list2.add(new Text((String) tokenizer.nextToken()));
+			}
+			list1.retainAll(list2);
+			context.write(key, new Text(list1.stream().map(Text::getBytes).toArray().toString()));
 		}
+	}
+	
+	public static class Tuple implements WritableComparable<Tuple> { 
+	    public Text left;
+		public Text right;
+		
+		public Tuple() {
+			this.left = new Text();
+			this.right = new Text();
+		}
+	    
+	    public Text getLeft() {
+			return left;
+		}
+
+		public void setLeft(Text left) {
+			this.left = left;
+		}
+
+		public Text getRight() {
+			return right;
+		}
+
+		public void setRight(Text right) {
+			this.right = right;
+		}
+	    
+	    public Tuple(Text left, Text right) {
+	    	this.left = left;
+	    	this.right = right;
+	    }
+
+	    @Override
+	    public void readFields(DataInput in) throws IOException {
+	        left.clear();
+	        right.clear();
+	        in.readLine();
+	        byte[] b = new byte[1];
+	        in.readFully(b);
+	        logger.info("ReadingFields: Left=" + new String(b, StandardCharsets.UTF_8));
+	        left = new Text("" + in.readChar() + in.readChar());
+	        right = new Text("" + in.readChar() + in.readChar());
+	        logger.info("ReadingFields: Left=" + left.toString() + " Right=" + right.toString());
+	    }
+
+	    @Override
+	    public void write(DataOutput out) throws IOException {
+	    	out.writeBytes(left.toString());
+	    	out.writeChar(':');
+	    	out.writeBytes(right.toString());
+	    }
+
+	    @Override
+	    public int compareTo(Tuple other) {
+	        String t1 = left.toString() + right.toString();
+	        String t2 = other.left.toString() + other.right.toString();
+	        return t1.compareTo(t2);
+	    }
 	}
 }
